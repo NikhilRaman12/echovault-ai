@@ -102,6 +102,10 @@ class GemmaService:
                 if resp.status_code == 200:
                     data = resp.json()
                     return data.get("response", "").strip()
+                elif resp.status_code == 500:
+                    # Model runner termination (e.g. OOM / buffer allocation failure).
+                    # Fail over immediately so fallback preservation activates without latency.
+                    raise GemmaServiceError(f"Ollama runner failure (HTTP 500): {resp.text}")
                 else:
                     last_error = f"HTTP {resp.status_code}: {resp.text}"
             except requests.exceptions.Timeout:
@@ -200,52 +204,68 @@ Produce a JSON object with this exact structure:
 
         # Build evidence context block
         evidence_text = "\n\n".join([
-            f"[Source Memory: {p.title} | Narrator: {p.narrator or 'Unknown'} | Date: {p.event_date or 'Undated'}]\n"
-            f"Passage: {p.passage}"
+            f"Memory Title: '{p.title}' (Narrated by {p.narrator or 'Family Member'}):\n{p.passage}"
             for p in retrieved_passages
         ])
 
-        system_prompt = (
-            "You are the EchoVault Remembrance Agent. "
-            "CORE DIRECTIVE: Answer the question using ONLY the provided memory evidence passages. "
-            "Never invent details, dates, relationships, or names not present in the evidence. "
-            "If the evidence does NOT contain the answer, you MUST respond exactly: "
-            "\"I couldn't find this information in your saved memories.\""
-        )
+        prompt = f"""You are the EchoVault Remembrance Agent preserving family oral history.
+Answer the question using ONLY the family memory accounts below.
+If the information is not mentioned in the memories, respond: "I couldn't find this information in your saved memories."
 
-        prompt = f"""
-EVIDENCE FROM ARCHIVED MEMORIES:
-\"\"\"{evidence_text}\"\"\"
+{evidence_text}
 
-USER QUESTION:
-\"{question}\"
+Question: {question}
+Answer:"""
 
-INSTRUCTIONS:
-1. Ground your answer entirely in the evidence above.
-2. If the memories do not state the answer, reply: "I couldn't find this information in your saved memories."
-3. Cite the memory title that supports your answer.
-4. Keep the answer clear, respectful, and direct.
-"""
+        # Check keyword relevance overlap before LLM synthesis
+        query_words = [w.lower() for w in re.findall(r"\w+", question) if len(w) > 2]
+        query_non_stop = [
+            w for w in query_words
+            if w not in {"what", "where", "when", "who", "why", "how", "did", "was", "were", "the", "about", "our", "their", "tell", "does", "which"}
+        ]
+        combined_evidence = " ".join([p.passage.lower() + " " + p.title.lower() for p in retrieved_passages])
+        has_topic_match = any(kw in combined_evidence for kw in (query_non_stop or query_words))
+
+        if not has_topic_match:
+            return GroundedAnswer(
+                question=question,
+                answer="I couldn't find this information in your saved memories.",
+                citations=[],
+                supporting_memory_titles=[],
+                is_abstention=True,
+                abstention_reason="No matching facts or topical evidence found in retrieved memory passages.",
+            )
 
         try:
-            raw_response = self.call_ollama(prompt, system_prompt=system_prompt, format_json=False)
+            raw_response = self.call_ollama(prompt, format_json=False)
             clean_answer = raw_response.strip()
+            logger.info(f"Ollama raw answer: {clean_answer}")
 
-            # Check for abstention cues
-            is_abstention = (
-                "couldn't find this information" in clean_answer.lower()
-                or "could not find this information" in clean_answer.lower()
-                or "not mentioned in the" in clean_answer.lower()
-            )
+            abstention_indicators = [
+                "couldn't find", "could not find", "not mentioned", "does not provide",
+                "does not mention", "cannot answer", "can't answer", "no information",
+                "not provided", "not found", "no mention"
+            ]
+            is_abstention = any(ind in clean_answer.lower() for ind in abstention_indicators)
+
+            if is_abstention:
+                return GroundedAnswer(
+                    question=question,
+                    answer="I couldn't find this information in your saved memories.",
+                    citations=[],
+                    supporting_memory_titles=[],
+                    is_abstention=True,
+                    abstention_reason="Information absent from preserved memory records.",
+                )
 
             titles = [p.title for p in retrieved_passages]
             return GroundedAnswer(
                 question=question,
                 answer=clean_answer,
-                citations=retrieved_passages if not is_abstention else [],
-                supporting_memory_titles=titles if not is_abstention else [],
-                is_abstention=is_abstention,
-                uncertainty_disclosure="Grounded strictly in archived evidence." if not is_abstention else "Information absent from archive.",
+                citations=retrieved_passages,
+                supporting_memory_titles=titles,
+                is_abstention=False,
+                uncertainty_disclosure="Grounded strictly in archived evidence.",
             )
         except Exception as e:
             # Deterministic fallback when model is unreachable

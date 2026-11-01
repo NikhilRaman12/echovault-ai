@@ -478,11 +478,17 @@ class Database:
                     raw_score = r["rank_score"]
                     norm_score = round(max(0.1, 10.0 / (1.0 + abs(raw_score))), 2)
                     
-                    passage = r["snippet_passage"] or (r["content"][:250] + "...")
+                    # Provide full narrative context when concise, otherwise clean snippet
+                    full_content = r["content"]
+                    if len(full_content) <= 800:
+                        passage = full_content
+                    else:
+                        passage = (r["snippet_passage"] or full_content[:400] + "...").replace("<b>", "").replace("</b>", "")
+
                     results.append(RetrievedPassage(
                         memory_id=r["id"],
                         title=r["title"],
-                        passage=passage.replace("<b>", "").replace("</b>", ""),
+                        passage=passage,
                         narrator=r["narrator"],
                         event_date=r["event_date_raw"],
                         relevance_score=norm_score,

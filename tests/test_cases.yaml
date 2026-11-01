@@ -1,0 +1,162 @@
+# EchoVault AI — Comprehensive Test Specifications
+version: "1.0"
+suite_name: "EchoVault AI Production Readiness Verification Suite"
+
+test_categories:
+  # -------------------------------------------------------------
+  # 1. Memory Intake & Content Validation
+  # -------------------------------------------------------------
+  - category: "intake_validation"
+    description: "Verify input boundary enforcement and sanitization"
+    cases:
+      - id: "TC_INTAKE_01"
+        name: "Standard valid memory intake"
+        input:
+          content: "In August 1955, we visited the Grand Canyon in an old green Buick."
+          narrator: "Uncle George"
+        expected:
+          status: "pending"
+          is_valid: true
+
+      - id: "TC_INTAKE_02"
+        name: "Empty content rejection"
+        input:
+          content: "   "
+          narrator: "Unknown"
+        expected:
+          raises_error: true
+          error_type: "IntakeValidationError"
+
+      - id: "TC_INTAKE_03"
+        name: "Unsupported audio format rejection"
+        input:
+          filename: "story_tape.exe"
+          bytes_length: 1024
+        expected:
+          raises_error: true
+          error_type: "IntakeValidationError"
+
+  # -------------------------------------------------------------
+  # 2. Duplicate Detection & Data Integrity
+  # -------------------------------------------------------------
+  - category: "deduplication"
+    description: "Verify identical content hashes are prevented from duplicate storage"
+    cases:
+      - id: "TC_DEDUP_01"
+        name: "Detect duplicate memory hash"
+        input:
+          content: "Right before William shipped out with the 101st Airborne in July 1944, we sat together on the front porch of the old stone cottage in Savannah. The jasmine was blooming thick and sweet in the evening heat. He reached into his uniform pocket and pressed his grandfather's silver pocket watch into my palms. He looked at me and said, 'Keep this ticking until I come through that wooden gate.' For three long years, I wound that spring every morning at six o'clock sharp before going to work at the telegraph office. I think the day he finally returned was a Tuesday in October 1947, though Aunt Sarah always swore it was a Wednesday afternoon."
+        expected:
+          duplicate_found: true
+
+      - id: "TC_DEDUP_02"
+        name: "Unique content generates unique hash"
+        input:
+          content: "Completely unique synthetic story about an astronomical telescope built in 1978."
+        expected:
+          duplicate_found: false
+
+  # -------------------------------------------------------------
+  # 3. SQLite FTS5 Full-Text Search Retrieval
+  # -------------------------------------------------------------
+  - category: "fts5_retrieval"
+    description: "Verify FTS5 full-text indexing, BM25 scoring, and snippet extraction"
+    cases:
+      - id: "TC_SEARCH_01"
+        name: "Search for specific place (Savannah)"
+        query: "Savannah porch"
+        expected:
+          min_results: 1
+          expected_title_contains: "Savannah"
+
+      - id: "TC_SEARCH_02"
+        name: "Search for historical subject (Boeing apprentice)"
+        query: "Boeing Stratocruiser Henderson"
+        expected:
+          min_results: 1
+          expected_title_contains: "Boeing"
+
+      - id: "TC_SEARCH_03"
+        name: "Search for family heirloom (Cedar chest Munich)"
+        query: "cedar chest Munich"
+        expected:
+          min_results: 1
+          expected_title_contains: "Cedar Chest"
+
+      - id: "TC_SEARCH_04"
+        name: "Search for non-existent keywords returns empty"
+        query: "QuantumSubmarineSuperconductor999"
+        expected:
+          min_results: 0
+          max_results: 0
+
+  # -------------------------------------------------------------
+  # 4. Grounded Question Answering & Abstention
+  # -------------------------------------------------------------
+  - category: "grounded_qa"
+    description: "Verify answers are strictly cited and unsupported questions abstain"
+    cases:
+      - id: "TC_QA_01"
+        name: "Answer grounded in Savannah pocket watch memory"
+        question: "What did William say when he gave the silver pocket watch?"
+        expected:
+          is_abstention: false
+          must_contain_any:
+            - "wooden gate"
+            - "ticking"
+            - "gate"
+
+      - id: "TC_QA_02"
+        name: "Answer grounded in Boeing apprentice memory"
+        question: "What did foreman Frank Henderson tell his apprentice at Boeing?"
+        expected:
+          is_abstention: false
+          must_contain_any:
+            - "micrometer"
+            - "fingers"
+            - "man"
+
+      - id: "TC_QA_03"
+        name: "Answer grounded in Bitter Creek homestead memory"
+        question: "What did Benjamin say about the earth on Bitter Creek?"
+        expected:
+          is_abstention: false
+          must_contain_any:
+            - "free"
+            - "never lies"
+            - "earth"
+
+      - id: "TC_QA_04"
+        name: "Abstention on completely unrecorded fact"
+        question: "What color was grandfather's pet kangaroo in Sydney?"
+        expected:
+          is_abstention: true
+          exact_abstention_text: "I couldn't find this information in your saved memories."
+
+      - id: "TC_QA_05"
+        name: "Abstention on unrecorded recipe"
+        question: "What was grandmother's secret recipe for chocolate cake?"
+        expected:
+          is_abstention: true
+          exact_abstention_text: "I couldn't find this information in your saved memories."
+
+  # -------------------------------------------------------------
+  # 5. Archive Export & Portability
+  # -------------------------------------------------------------
+  - category: "export_portability"
+    description: "Verify full JSON and Markdown exports match relational database"
+    cases:
+      - id: "TC_EXP_01"
+        name: "JSON export schema validation"
+        expected:
+          required_keys:
+            - "application"
+            - "version"
+            - "exported_at"
+            - "total_memories"
+            - "memories"
+
+      - id: "TC_EXP_02"
+        name: "Markdown book formatting check"
+        expected:
+          must_contain_heading: "# EchoVault AI — Family Memory Archive"
